@@ -1,8 +1,12 @@
 #!/usr/bin/python3
 
-import smbus  # pip3 install smbus-cffi
+import os
 import struct
+import itertools
 from collections import namedtuple
+
+import smbus  # pip3 install smbus-cffi
+
 
 from pprint import pprint
 from hexdump import hexdump as _hexdump
@@ -22,12 +26,15 @@ _memmap = {
         '0' : _MemBlock(0xE000, 0x2000, 0xB000),
 }
 
+_memsize = sum([ b.length for b in _memmap.values() ])
+
 
 class VerificationError(Exception):
     pass
 
 
-class M37512_Flash:
+class M37512Flash:
+    """Class for reading/writing flash memory of M37512 over SMBUS interface"""
 
     def __init__(self, i2c_bus, bat_addr=0x0B):
         self.bus = smbus.SMBus(i2c_bus)
@@ -57,14 +64,42 @@ class M37512_Flash:
         d2 = self.__read_block(block)
         if d1 != d2:
             raise VerificationError
-        h(d1)
         return d1
 
 
+class DumpFile:
+    """Class representing BE2Works-compatible M37512 memory dump file"""
+
+    def __init__(self, file_name, mode):
+        self.file_name = file_name
+        if mode == 'r':
+            # preread the existing file
+            with open(self.file_name, 'rb') as f:
+                self.mem_image = bytearray(f.read())
+                assert len(self.mem_image) == _memsize
+        else:
+            # prepare empty buffer to be filled up
+            self.mem_image = bytearray(itertools.repeat(0xFF, _memsize))
+
+    def get_block(self, block):
+        length, offset = _memmap[block.upper()][1:3]
+        return self.mem_image[offset:offset+length]
+
+    def put_block(self, block, data):
+        length, offset = _memmap[block.upper()][1:3]
+        assert len(data) == length
+        self.mem_image[offset:offset+length] = data
+
+    def save(self):
+        with open(self.file_name, 'wb') as f:
+            f.write(self.mem_image)
 
 
 
 if __name__ == "__main__":
-    pprint(_memmap)
-    dev = M37512_Flash(5)
-    dev.read_block('1')
+    dev = M37512Flash(5)
+    f = DumpFile('/tmp/x.bin', 'w')
+    for block in _memmap.keys():
+        f.put_block(block, dev.read_block(block))
+    f.save()
+#    dev.read_block('1')
