@@ -48,6 +48,19 @@ class M37512Flash:
         assert len(r) == 16  # if this fails, SMBUS API of your chip is probably different...
         return r
 
+    def __write16B(self, addr, data):
+        """Writes 16 bytes to the flash memory (one transaction). Device seems to accept different sizes,
+        but 16 bytes were chosen for simplicity / similarity with read process."""
+        # 0x40 -> write (data=[AddrLO, AddrHI, data0, data1, ..., data15])
+        assert len(data) == 16
+        self.bus.write_block_data(self.bat_addr, 0x40, list(struct.pack('<H', addr) + data))
+
+    def __erase_block(self, addr):
+        """Erase block. Address should be the last address *in* the block."""
+        # 0x20 -> erase (data=[AddrHI, AddrLO]) note the different byte order in address!
+        self.bus.write_block_data(self.bat_addr, 0x20, list(struct.pack('>H', addr)))
+
+
     def __read_block(self, block):
         """Read complete flash memory block (without verification)"""
         addr, length = _memmap[block.upper()][0:2]
@@ -58,6 +71,18 @@ class M37512Flash:
             i += 16
         return d
 
+    def __write_block(self, block, data):
+        """Writes complete block to the memory (without verification)"""
+        addr, length = _memmap[block.upper()][0:2]
+        assert len(data) == length
+        existing_data = self.__read_block(block)
+        i = 0
+        while i < length:
+            # write only rows which are different than memory contents
+            if existing_data[i:i+16] != data[i:i+16]:
+                self.__write16B(addr+i, data[i:i+16])
+            i += 16
+
     def read_block(self, block):
         """Read complete flash memory block (with verification)"""
         d1 = self.__read_block(block)
@@ -65,6 +90,20 @@ class M37512Flash:
         if d1 != d2:
             raise VerificationError
         return d1
+
+    def write_block(self, block, data):
+        """Writes complete block to the memory (with verification)"""
+        self.__write_block(block)
+        d2 = self.__read_block(block)
+        if data != d2:
+            raise VerificationError
+
+    def erase_block(self, block):
+        addr, length = _memmap[block.upper()][0:2]
+        # calculate address of the last byte in the block
+        self.__erase_block(addr + length - 1)
+
+
 
 
 class DumpFile:
@@ -99,7 +138,7 @@ class DumpFile:
 if __name__ == "__main__":
     dev = M37512Flash(5)
     f = DumpFile('/tmp/x.bin', 'w')
-    for block in _memmap.keys():
-        f.put_block(block, dev.read_block(block))
-    f.save()
+#    for block in _memmap.keys():
+#        f.put_block(block, dev.read_block(block))
+#    f.save()
 #    dev.read_block('1')
