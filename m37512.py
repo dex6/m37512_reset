@@ -97,7 +97,7 @@ class _TestBackend:
     def erase_block(self, addr):
         block = self.__addr_to_block(addr)
         length, offset = _memmap[block.upper()][1:3]
-        self.mem_image[offset:offset+length] = b'\xFF' * length
+        self.f.mem_image[offset:offset+length] = b'\xFF' * length
         self.f.save()
 
 
@@ -128,19 +128,17 @@ class M37512Flash:
             self.__b.write(addr+i, data[i:i+to_write])
             i += to_write
 
-    def erase_block(self, block):
-        addr, length = _memmap[block.upper()][0:2]
-        # calculate address of the last byte in the block
-        self.__b.erase_block(addr + length - 1)
-
     def read_block(self, block):
         """Read complete flash memory block (with double check)"""
         print("Reading block {0}... (1st time)".format(block))
         d1 = self.__read_block(block)
         print("Reading block {0}... (2nd time)".format(block))
         d2 = self.__read_block(block)
+        print("Comparing...", end='')
         if d1 != d2:
+            print(" ERROR!", end='\n\n')
             raise VerificationError
+        print(" OK", end='\n\n')
         return d1
 
     def write_block(self, block, data):
@@ -148,14 +146,53 @@ class M37512Flash:
         # This one is more complicated to avoid unneeded writes/erase cycles.
         addr, length = _memmap[block.upper()][0:2]
         assert len(data) == length
+
         # 1st, read and compare existing contents of the block
-        erase_needed = False
+        print("Checking if write of block {0} is needed...".format(block))
+        i, write_needed, erase_needed = 0, False, False
+        existing_data = bytearray(length)
+        while i < length and not erase_needed:
+            j = 0
+            existing_data[i:i+16] = self.__b.read16B(addr+i)
+            while j < 16:
+                if existing_data[i+j] != data[i+j]:
+                    write_needed = True
+                    if existing_data[i+j] != 0xFF:
+                        erase_needed = True
+                        break
+                j += 1
+            i += 16
+        print("Check result: write_needed={0}, erase_needed={1}".format(write_needed, erase_needed))
 
+        # 2nd, erase the data if needed
+        if erase_needed:
+            # calculate address of the last byte in the block
+            print("Erasing block {0}...".format(block))
+            self.__b.erase_block(addr + length - 1)
+            existing_data[:] = b'\xFF' * length
 
-        self.__write_block(block)
-        d2 = self.__read_block(block)
-        if data != d2:
-            raise VerificationError
+        # 3rd, write the data
+        if write_needed:
+            print("Writing block {0}...".format(block))
+            start, i = -1, 0
+            while i < length:
+                if existing_data[i] != data[i]:
+                    if start < 0:
+                        start = i
+                else:
+                    if start >= 0:
+                        print("write start={0}: {1}bytes  {2:02x}..{3:02x}".format(start, len(data[start:i]), data[start:i][0], data[start:i][-1]))
+                        self.__write_data(addr+start, data[start:i])
+                        start = -1
+                i += 1
+            if start >= 0:
+                print("WRITE start={0}: {1}bytes  {2:02x}..{3:02x}".format(start, len(data[start:]), data[start:][0], data[start:][-1]))
+                self.__write_data(addr+start, data[start:])
+
+            # 4th, verify data
+            existing_data = self.__read_block(block)
+            if data != existing_data:
+                raise VerificationError
 
     def verify_block(self, block, data):
         """Verify if memory block contains specified contents"""
@@ -172,7 +209,7 @@ class DumpFile:
     def __init__(self, file_name, mode):
         self.file_name = file_name
         if mode == 'r':
-            # preread the existing file
+            # read the existing file
             with open(self.file_name, 'rb') as f:
                 self.mem_image = bytearray(f.read())
                 assert len(self.mem_image) == _memsize
@@ -197,8 +234,13 @@ class DumpFile:
 
 if __name__ == "__main__":
     dev = M37512Flash(5)
-    f = DumpFile('/tmp/x.bin', 'w')
+    f = DumpFile('/tmp/x.bin', 'r')
+    data = f.get_block('a')
+#    h(data)
+#    h(dev.read_block('b'))
+    dev.write_block('a', data)
     for block in _memmap.keys():
-        f.put_block(block, dev.read_block(block))
-    f.save()
+        dev.write_block(block, f.get_block(block))
+#        f.put_block(block, dev.read_block(block))
+#    f.save()
 #    dev.read_block('1')
