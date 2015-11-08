@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-import os
+import os, sys
 import struct
 import itertools
 from collections import namedtuple
@@ -13,6 +13,11 @@ from hexdump import hexdump as _hexdump
 def h(it, hdr=''):
     for line in _hexdump(bytes(it), result='generator'):
         print(hdr + line)
+
+# Settings:
+_i2c_dev = 5
+_bat_addr = 0x0b
+# End of settings
 
 
 _MemBlock = namedtuple('MemBlock', ['addr', 'length', 'offset'])
@@ -136,9 +141,9 @@ class M37512Flash:
         d2 = self.__read_block(block)
         print("Comparing...", end='')
         if d1 != d2:
-            print(" ERROR!", end='\n\n')
+            print(" READ ERROR!", end='\n\n')
             raise VerificationError
-        print(" OK", end='\n\n')
+        print(" READ OK", end='\n\n')
         return d1
 
     def write_block(self, block, data):
@@ -181,15 +186,15 @@ class M37512Flash:
                         start = i
                 else:
                     if start >= 0:
-                        print("write start={0}: {1}bytes  {2:02x}..{3:02x}".format(start, len(data[start:i]), data[start:i][0], data[start:i][-1]))
+                        print("  write start={0:5d}: {1:4d}bytes  {2:02x}..{3:02x}".format(start, len(data[start:i]), data[start:i][0], data[start:i][-1]))
                         self.__write_data(addr+start, data[start:i])
                         start = -1
                 i += 1
             if start >= 0:
-                print("WRITE start={0}: {1}bytes  {2:02x}..{3:02x}".format(start, len(data[start:]), data[start:][0], data[start:][-1]))
+                print("  WRITE start={0:5d}: {1:4d}bytes  {2:02x}..{3:02x}".format(start, len(data[start:]), data[start:][0], data[start:][-1]))
                 self.__write_data(addr+start, data[start:])
 
-            # 4th, verify data
+            # 4th, verify the data
             existing_data = self.__read_block(block)
             if data != existing_data:
                 raise VerificationError
@@ -197,10 +202,11 @@ class M37512Flash:
     def verify_block(self, block, data):
         """Verify if memory block contains specified contents"""
         existing_data = self.read_block(block)
+        print("Verifying...", end='')
         if existing_data != data:
+            print(" VERIFICATION ERROR!", end='\n\n')
             raise VerificationError
-
-
+        print(" VERIFICATION OK", end='\n\n')
 
 
 class DumpFile:
@@ -231,16 +237,55 @@ class DumpFile:
             f.write(self.mem_image)
 
 
+def main():
+    def help():
+        print("Usage:")
+        print("\t{0} <dump_file> <mem_operation> [mem_blocks]\n".format(sys.argv[0]))
+        print("Arguments:")
+        print("\t <dump_file>     - path to the memory dump file (local image of the flash)")
+        print("\t <mem_operation> - operation to be done on the M37512 flash:")
+        print("\t                   * read   - dump flash memory contents into the file;")
+        print("\t                   * write  - store contents from the dump file to the flash;")
+        print("\t                   * verify - check if the flash and dump file are the same")
+        print("\t [mem_blocks]    - which memory blocks should be written/verified (AB0123)\n")
+
+    # read command line arguments
+    if len(sys.argv) < 3:
+        help()
+        return 1
+    dump_file_name = sys.argv[1]
+    operation = sys.argv[2]
+    blocks = "AB0123" if len(sys.argv) == 3 else sys.argv[3].upper()
+
+    # prepare for the job
+    if operation == 'read':
+        blocks = "AB0123"  # always read all blocks to make sure the dump file is complete
+        f = DumpFile(dump_file_name, 'w')
+        action = lambda dev, f, block: f.put_block(block, dev.read_block(block))
+    elif operation == 'write':
+        f = DumpFile(dump_file_name, 'r')
+        action = lambda dev, f, block: dev.write_block(block, f.get_block(block))
+    elif operation == 'verify':
+        f = DumpFile(dump_file_name, 'r')
+        action = lambda dev, f, block: dev.verify_block(block, f.get_block(block))
+    else:
+        help()
+        raise ValueError("Invalid value of 'mem_operation' argument!")
+
+    # and finally, do it
+    dev = M37512Flash(_i2c_dev, _bat_addr)
+    for block in blocks:
+        if block in _memmap:
+            action(dev, f, block)
+        else:
+            print("Ignoring wrong block name: {0}".format(block))
+
+    # save the file if we were writing data from memory to it
+    if operation == 'read':
+        f.save()
+
+    return 0
+
 
 if __name__ == "__main__":
-    dev = M37512Flash(5)
-    f = DumpFile('/tmp/x.bin', 'r')
-    data = f.get_block('a')
-#    h(data)
-#    h(dev.read_block('b'))
-    dev.write_block('a', data)
-    for block in _memmap.keys():
-        dev.write_block(block, f.get_block(block))
-#        f.put_block(block, dev.read_block(block))
-#    f.save()
-#    dev.read_block('1')
+    sys.exit(main())
