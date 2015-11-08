@@ -8,12 +8,6 @@ from collections import namedtuple
 import smbus  # pip3 install smbus-cffi
 
 
-from pprint import pprint
-from hexdump import hexdump as _hexdump
-def h(it, hdr=''):
-    for line in _hexdump(bytes(it), result='generator'):
-        print(hdr + line)
-
 # Settings:
 _i2c_dev = 5
 _bat_addr = 0x0b
@@ -113,8 +107,8 @@ class M37512Flash:
     def __init__(self, i2c_bus, bat_addr=0x0B):
         """i2c-bus: number of i2c bus to use; (/dev/i2c-<i2c_bus>)
         bat_addr: battery address on the i2c bus"""
-#        self.__b = _M37512FlashBackend(i2c_bus, bat_addr)
-        self.__b = _TestBackend(i2c_bus, bat_addr)
+        self.__b = _M37512FlashBackend(i2c_bus, bat_addr)
+#        self.__b = _TestBackend(i2c_bus, bat_addr)
 
     def __read_block(self, block):
         """Read complete flash memory block (without verification)"""
